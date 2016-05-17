@@ -10,6 +10,10 @@ class M3Uzi
       @encryption_key_url = :unset
     end
 
+    def valid?
+      @path && ::File.exist?(@path)
+    end
+
     def attribute_string
       if duration.kind_of?(Float)
         "#{sprintf('%0.4f',duration)}," + description.to_s.gsub(/[\r\n]/,' ').strip

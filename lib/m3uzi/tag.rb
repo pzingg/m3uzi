@@ -14,9 +14,9 @@ class M3Uzi
     end
 
     def format
-      string << "#EXT-X-#{name}"
-      string << ":#{value}" if value
-      string
+      s = "#EXT-X-#{name}"
+      s << ":#{value}" if value
+      s
     end
 
     def valid?

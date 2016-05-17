@@ -5,15 +5,17 @@ require 'm3uzi/file'
 require 'm3uzi/stream'
 require 'm3uzi/comment'
 require 'm3uzi/version'
+require 'tempfile'
 
 class M3Uzi
 
   attr_accessor :header_tags, :playlist_items
   attr_accessor :playlist_type, :final_media_file
   attr_accessor :version, :initial_media_sequence, :sliding_window_duration
+  attr_accessor :path
 
   def initialize
-    @header_tags = {}
+    @header_tags = []
     @playlist_items = []
     @final_media_file = true
     @version = 1
@@ -32,44 +34,67 @@ class M3Uzi
   ## For now, reading m3u8 files is not keeping up to date with writing, so we're
   ## disabling it in this version.  (Possibly to be re-introduced in the future.)
   ##
-  # def self.read(path)
-  #   m3u = self.new
-  #   lines = ::File.readlines(path)
-  #   lines.each_with_index do |line, i|
-  #     case type(line)
-  #     when :tag
-  #       name, value = parse_general_tag(line)
-  #       m3u.add_tag do |tag|
-  #         tag.name = name
-  #         tag.value = value
-  #       end
-  #     when :info
-  #       duration, description = parse_file_tag(line)
-  #       m3u.add_file do |file|
-  #         file.path = lines[i+1].strip
-  #         file.duration = duration
-  #         file.description = description
-  #       end
-  #       m3u.final_media_file = false
-  #     when :stream
-  #       attributes = parse_stream_tag(line)
-  #       m3u.add_stream do |stream|
-  #         stream.path = lines[i+1].strip
-  #         attributes.each_pair do |k,v|
-  #           k = k.to_s.downcase.sub('-','_')
-  #           next unless [:bandwidth, :program_id, :codecs, :resolution].include?(k)
-  #           v = $1 if v.to_s =~ /^"(.*)"$/
-  #           stream.send("#{k}=", v)
-  #         end
-  #       end
-  #     when :final
-  #       m3u.final_media_file = true
-  #     else
-  #       next
-  #     end
-  #   end
-  #   m3u
-  # end
+  def self.read(path, encoding='iso-8859-1')
+    m3u = self.new
+    m3u.path = path
+    lines = ::File.readlines(path, encoding: encoding)
+    lines.each_with_index do |line, i|
+      line.strip!
+      case type(line)
+      when :tag
+        name, value = parse_general_tag(line)
+        next if name == 'M3U'
+        m3u.add_tag do |tag|
+          tag.source_line = i+1
+          tag.name = name
+          tag.value = value
+        end
+      when :info
+        duration, description = parse_file_tag(line)
+        m3u.add_file do |file|
+          file.path = lines[i+1].strip
+          file.source_line = i+1
+          file.duration = duration
+          file.description = description
+        end
+        m3u.final_media_file = false
+      when :stream
+        attributes = parse_stream_tag(line)
+        m3u.add_stream do |stream|
+          stream.source_line = i+1
+          stream.path = lines[i+1].strip
+          attributes.each_pair do |k,v|
+            k = k.to_s.downcase.sub('-','_')
+            next unless [:bandwidth, :program_id, :codecs, :resolution].include?(k)
+            v = $1 if v.to_s =~ /^"(.*)"$/
+            stream.send("#{k}=", v)
+          end
+        end
+      when :final
+        m3u.final_media_file = true
+      else
+        next
+      end
+    end
+    m3u
+  end
+  
+  def self.clean(path, encoding='iso-8859-1')
+    m3u = read(path, encoding)
+    file_count = m3u.items(File).size
+    valid_files = m3u.valid_items(File)
+    if valid_files.size < file_count
+      dir = ::File.dirname(path)
+      basename = ::File.basename(path, '.*')
+      ext = ::File.extname(path)
+      tempfile = ::Tempfile.new([basename, ext], encoding: encoding)
+      m3u.version = 0 # winamp
+      m3u.write_to_io(tempfile)
+      tempfile
+    else
+      nil
+    end
+  end
 
   def write_to_io(io_stream)
     reset_encryption_key_history
@@ -80,7 +105,7 @@ class M3Uzi
     io_stream << "#EXT-X-VERSION:#{@version.to_i}\n" if @version > 1
     io_stream << "#EXT-X-PLAYLIST-TYPE:#{@playlist_type.to_s.upcase}\n" if [:event,:vod].include?(@playlist_type)
 
-    if items(File).length > 0
+    if @version > 0 && items(File).length > 0
       io_stream << "#EXT-X-MEDIA-SEQUENCE:#{@initial_media_sequence+@removed_file_count}\n" if @playlist_type == :live
       max_duration = valid_items(File).map { |f| f.duration.to_f }.max || 10.0
       io_stream << "#EXT-X-TARGETDURATION:#{max_duration.ceil}\n"
@@ -107,8 +132,8 @@ class M3Uzi
     io_stream << "#EXT-X-ENDLIST\n" if items(File).length > 0 && (@final_media_file || @playlist_type == :vod)
   end
 
-  def write(path)
-    ::File.open(path, "w") { |f| write_to_io(f) }
+  def write(path, encoding='iso-8859-1')
+    ::File.open(path, 'w', encoding: encoding) { |f| write_to_io(f) }
   end
 
   def items(kind)
@@ -117,6 +142,10 @@ class M3Uzi
 
   def valid_items(kind)
     @playlist_items.select { |item| item.kind_of?(kind) && item.valid? }
+  end
+
+  def invalid_items(kind)
+    @playlist_items.select { |item| item.kind_of?(kind) && !item.valid? }
   end
 
   #-------------------------------------
@@ -232,7 +261,7 @@ class M3Uzi
     new_tag.name = name
     new_tag.value = value
     yield(new_tag) if block_given?
-    @header_tags[new_tag.name] = new_tag
+    @header_tags << new_tag
   end
 
   # def [](key)
@@ -265,8 +294,6 @@ class M3Uzi
   # end
 
   def check_version_restrictions
-    @version = 1
-
     #
     # Version 2 Features
     #
@@ -298,37 +325,37 @@ class M3Uzi
 
 protected
 
-  # def self.type(line)
-  #   case line
-  #   when /^\s*$/
-  #     :whitespace
-  #   when /^#(?!EXT)/
-  #     :comment
-  #   when /^#EXTINF/
-  #     :info
-  #   when /^#EXT(-X)?-STREAM-INF/
-  #     :stream
-  #   when /^#EXT(-X)?-ENDLIST/
-  #     :final
-  #   when /^#EXT(?!INF)/
-  #     :tag
-  #   else
-  #     :file
-  #   end
-  # end
-  #
-  # def self.parse_general_tag(line)
-  #   line.match(/^#EXT(?:-X-)?(?!STREAM-INF)([^:\n]+)(:([^\n]+))?$/).values_at(1, 3)
-  # end
-  #
-  # def self.parse_file_tag(line)
-  #   line.match(/^#EXTINF:[ \t]*(\d+),?[ \t]*(.*)$/).values_at(1, 2)
-  # end
-  #
-  # def self.parse_stream_tag(line)
-  #   match = line.match(/^#EXT-X-STREAM-INF:(.*)$/)[1]
-  #   match.scan(/([A-Z-]+)\s*=\s*("[^"]*"|[^,]*)/) # return attributes as array of arrays
-  # end
+  def self.type(line)
+    case line
+    when /^\s*$/
+     :whitespace
+    when /^#(?!EXT)/
+     :comment
+    when /^#EXTINF/
+     :info
+    when /^#EXT(-X)?-STREAM-INF/
+     :stream
+    when /^#EXT(-X)?-ENDLIST/
+     :final
+    when /^#EXT(?!INF)/
+     :tag
+    else
+     :file
+    end
+  end
+
+  def self.parse_general_tag(line)
+    line.match(/^#EXT(?:-X-)?(?!STREAM-INF)([^:\n]+)(:([^\n]+))?$/).values_at(1, 3)
+  end
+
+  def self.parse_file_tag(line)
+    line.match(/^#EXTINF:[ \t]*(\d+),?[ \t]*(.*)$/).values_at(1, 2)
+  end
+
+  def self.parse_stream_tag(line)
+    match = line.match(/^#EXT-X-STREAM-INF:(.*)$/)[1]
+    match.scan(/([A-Z-]+)\s*=\s*("[^"]*"|[^,]*)/) # return attributes as array of arrays
+  end
 
   def cleanup_sliding_window
     return unless @sliding_window_duration && @playlist_type == :live
