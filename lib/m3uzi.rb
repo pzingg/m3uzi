@@ -12,7 +12,7 @@ class M3Uzi
   attr_accessor :header_tags, :playlist_items
   attr_accessor :playlist_type, :final_media_file
   attr_accessor :version, :initial_media_sequence, :sliding_window_duration
-  attr_accessor :path
+  attr_accessor :path, :crlf
 
   def initialize
     @header_tags = []
@@ -23,6 +23,7 @@ class M3Uzi
     @sliding_window_duration = nil
     @removed_file_count = 0
     @playlist_type = :live
+    @crlf = "\r\n"
   end
 
 
@@ -101,18 +102,18 @@ class M3Uzi
     reset_byterange_history
 
     check_version_restrictions
-    io_stream << "#EXTM3U\n"
-    io_stream << "#EXT-X-VERSION:#{@version.to_i}\n" if @version > 1
-    io_stream << "#EXT-X-PLAYLIST-TYPE:#{@playlist_type.to_s.upcase}\n" if [:event,:vod].include?(@playlist_type)
+    io_stream << ("#EXTM3U" + @crlf)
+    io_stream << ("#EXT-X-VERSION:#{@version.to_i}" + @crlf) if @version > 1
+    io_stream << ("#EXT-X-PLAYLIST-TYPE:#{@playlist_type.to_s.upcase}" + @crlf) if [:event,:vod].include?(@playlist_type)
 
     if @version > 0 && items(File).length > 0
-      io_stream << "#EXT-X-MEDIA-SEQUENCE:#{@initial_media_sequence+@removed_file_count}\n" if @playlist_type == :live
+      io_stream << ("#EXT-X-MEDIA-SEQUENCE:#{@initial_media_sequence+@removed_file_count}" + @crlf) if @playlist_type == :live
       max_duration = valid_items(File).map { |f| f.duration.to_f }.max || 10.0
-      io_stream << "#EXT-X-TARGETDURATION:#{max_duration.ceil}\n"
+      io_stream << ("#EXT-X-TARGETDURATION:#{max_duration.ceil}" + @crlf)
     end
 
     @header_tags.each do |item|
-      io_stream << (item.format + "\n") if item.valid?
+      io_stream << (item.format + @crlf) if item.valid?
     end
 
     @playlist_items.each do |item|
@@ -120,16 +121,16 @@ class M3Uzi
 
       if item.kind_of?(File)
         encryption_key_line = generate_encryption_key_line(item)
-        io_stream << (encryption_key_line + "\n") if encryption_key_line
+        io_stream << (encryption_key_line + @crlf) if encryption_key_line
 
         byterange_line = generate_byterange_line(item)
-        io_stream << (byterange_line + "\n") if byterange_line
+        io_stream << (byterange_line + @crlf) if byterange_line
       end
 
-      io_stream << (item.format + "\n")
+      io_stream << (item.format + @crlf)
     end
 
-    io_stream << "#EXT-X-ENDLIST\n" if items(File).length > 0 && (@final_media_file || @playlist_type == :vod)
+    io_stream << ("#EXT-X-ENDLIST" + @crlf) if items(File).length > 0 && (@final_media_file || @playlist_type == :vod)
   end
 
   def write(path, encoding='iso-8859-1')
