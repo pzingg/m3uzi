@@ -109,7 +109,7 @@ class M3Uzi
     if @version > 0 && items(File).length > 0
       io_stream << ("#EXT-X-MEDIA-SEQUENCE:#{@initial_media_sequence+@removed_file_count}" + @crlf) if @playlist_type == :live
       max_duration = valid_items(File).map { |f| f.duration.to_f }.max || 10.0
-      io_stream << ("#EXT-X-TARGETDURATION:#{max_duration.ceil}" + @crlf)
+      io_stream << ("#EXT-X-TARGETDURATION:#{max_duration.ceil}"  + @crlf)
     end
 
     @header_tags.each do |item|
@@ -350,7 +350,7 @@ protected
   end
 
   def self.parse_file_tag(line)
-    line.match(/^#EXTINF:[ \t]*(\d+),?[ \t]*(.*)$/).values_at(1, 2)
+    line.match(/^#EXTINF:[ \t]*([-\d]+),?[ \t]*(.*)$/).values_at(1, 2)
   end
 
   def self.parse_stream_tag(line)
